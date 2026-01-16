@@ -1,9 +1,8 @@
-# CFNet: A Change Fusion Network for Inter-layer Feature Integration in Remote Sensing Change Detections
-Very High Resolution (VHR) Remote Sensing Change Detection Networks
+# A Cross-layer Feature Fusion Framework with Hierarchical Interaction for Remote Sensing Change Detection
 
 Methods
 -----------------
-<img width="1096" alt="image" src="images/CFNet.jpg">
+<img width="1096" alt="image" src="images/all.png">
 
 Quantitative Comparison
 -----------------

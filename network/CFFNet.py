@@ -19,23 +19,7 @@ class BasicConv2d(nn.Module):
         x = self.relu(x)
         return x
 
-class channel_att(nn.Module):
-    def __init__(self, channel, b=1, gamma=2):
-        super(channel_att, self).__init__()
-        kernel_size = int(abs((math.log(channel, 2) + b) / gamma))
-        kernel_size = kernel_size if kernel_size % 2 else kernel_size + 1
 
-        self.avg_pool = nn.AdaptiveAvgPool2d(1)
-        self.conv = nn.Conv1d(1, 1, kernel_size=kernel_size, padding=(kernel_size - 1) // 2, bias=False)
-        self.sigmoid = nn.Sigmoid()
-
-    def forward(self, x):
-        y = self.avg_pool(x)
-        y = y.squeeze(-1)
-        y = y.transpose(-1, -2)
-        y = self.conv(y).transpose(-1, -2).unsqueeze(-1)
-        y = self.sigmoid(y)
-        return x * y.expand_as(x)
 class local_att(nn.Module):
     def __init__(self, channel, reduction=16):
         super(local_att, self).__init__()
@@ -69,11 +53,16 @@ class local_att(nn.Module):
 
         out = x * s_h.expand_as(x) * s_w.expand_as(x)
         return out
-class CFM(nn.Module): #多尺度有效融合模块
+
+
+class MIFM(nn.Module):  # 多尺度有效融合模块
     def __init__(self, c1, c2):
         super().__init__()
-        self.channel_att = channel_att(c2)
-        self.local_att = local_att(c2)
+        kernel_size = int(abs((math.log(c1, 2) +1) / 2))
+        kernel_size = kernel_size if kernel_size % 2 else kernel_size + 1
+        self.avg_pool = nn.AdaptiveAvgPool2d(1)
+        self.conv = nn.Conv1d(1, 1, kernel_size=kernel_size, padding=(kernel_size - 1) // 2, bias=False)
+        self.sigmoid = nn.Sigmoid()
 
         self.conv1 = nn.Conv2d(c1, c2, kernel_size=1, stride=1)
         self.conv2 = nn.Conv2d(c2, c2, kernel_size=1, stride=1)
@@ -109,8 +98,6 @@ class CFM(nn.Module): #多尺度有效融合模块
         weight_2 = self.sigomid(bn_x2)
         X_GOBAL = global_conv1 + global_conv2
 
-        temp = self.channel_att(X_GOBAL)
-
         x_conv4 = self.conv4_gobal(X_GOBAL)
         X_4_sigmoid = self.sigomid(x_conv4)
         X_ = X_4_sigmoid * X_GOBAL
@@ -137,6 +124,15 @@ class CFM(nn.Module): #多尺度有效融合模块
         x_guiyi_1 = x_guiyi.reshape(N, C, H, W)
         x_gui = (x_guiyi_1 * self.gamma + self.beta)
 
+        y = self.avg_pool(X_GOBAL)
+        y = y.squeeze(-1)
+        y = y.transpose(-1, -2)
+        y = self.conv(y).transpose(-1, -2).unsqueeze(-1)
+        y = self.sigmoid(y)
+        y = X_GOBAL * y.expand_as(X_GOBAL)
+
+        ACGF = x_gui + y
+
         weight_x3 = self.Apt(X_GOBAL)
         reweights = self.sigomid(weight_x3)
         x_up_1 = reweights >= weight_1
@@ -150,13 +146,30 @@ class CFM(nn.Module): #多尺度有效融合模块
         x_so = self.gate_genator(x_low)
         x11_up_dwc = x11_up_dwc * x_so
         x22_low_pw = self.conv4(x_up)
-        xL = x11_up_dwc + x22_low_pw
+        RFRB = x11_up_dwc + x22_low_pw
 
-        xL = xL + x_gui + temp
-        out = self.local_att(xL)
+
+        out = RFRB + ACGF
+
+
         return out
 
-class CFNet(nn.Module):
+class MP_Block(nn.Module):
+    """Multi-level Interaction Perception Block (MP-Block)."""
+
+    def __init__(self, c1, c2):
+        super().__init__()
+        # 正确：把模块实例赋值给 self.xxx
+        self.mifm = MIFM(c1, c2)      # 注意：这里用类名/构造器
+        self.pam = local_att(c2)  # 这里假设 LocalAtt 是类；若是函数也要返回 nn.Module
+
+    def forward(self, x1, x2):
+        x = self.mifm(x1, x2)      # 正确：调用 self.mifm
+        out = self.pam(x)
+        return out
+
+
+class CFFNet(nn.Module):
     def __init__(self, pretrained=True):
         super().__init__()
         vgg16_bn = VGG16BN(pretrained=pretrained)
@@ -176,12 +189,9 @@ class CFNet(nn.Module):
             nn.Conv2d(64, 1, 1))
 
 
-        self.reduce4 = BasicConv2d(512, 512, 3, 1, 1)
-        self.reduce3 = BasicConv2d(512, 256, 3, 1, 1)
-        self.reduce2 = BasicConv2d(256, 128, 3, 1, 1)
-        self.CFM3 = CFM(512, 512)
-        self.CFM2 = CFM(512, 256)
-        self.CFM1 = CFM(256, 128)
+        self.MP_B3 = MP_Block(512, 512)
+        self.MP_B2 = MP_Block(512, 256)
+        self.MP_B1 = MP_Block(256, 128)
     def forward(self, x1, x2):
         size = x1.size()[2:]
         layer1_pre = self.inc(x1)
@@ -207,19 +217,18 @@ class CFNet(nn.Module):
         layer4 = self.conv_reduce_4(layer4)
 
         layer4_1 = F.interpolate(layer4, layer3.size()[2:], mode='bilinear', align_corners=True)
-        layer3 = self.CFM3(layer4_1,layer3)
+        layer3 = self.MP_B3(layer4_1,layer3)
 
         layer3_1 = F.interpolate(layer3, layer2.size()[2:], mode='bilinear', align_corners=True)
-        layer2 = self.CFM2(layer3_1, layer2)
+        layer2 = self.MP_B2(layer3_1, layer2)
 
         layer2_1 = F.interpolate(layer2, layer1.size()[2:], mode='bilinear', align_corners=True)
-        layer1 = self.CFM1(layer2_1, layer1)
+        layer1 = self.MP_B1(layer2_1, layer1)
 
         final_map = self.decoder_final(layer1)
         final_map = F.interpolate(final_map, size, mode='bilinear', align_corners=True)
 
-        out2 = final_map
-        return final_map, out2
+        return final_map
 
 
 
@@ -231,10 +240,10 @@ if __name__ == '__main__':
     inp2 = torch.rand(1, 3, 256, 256)
 
     # 创建模型实例
-    model = CFNet()
+    model = CFFNet()
 
     # 计算输出（根据模型的前向传播）
-    out, ds = model(inp1, inp2)
+    out = model(inp1, inp2)
 
     # 使用 THOP 计算 FLOPS 和参数量
     flops, param = profile(model, inputs=(inp1, inp2))
