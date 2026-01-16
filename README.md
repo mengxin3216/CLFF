@@ -3,7 +3,7 @@ Very High Resolution (VHR) Remote Sensing Change Detection Networks
 
 Methods
 -----------------
-<img width="1096" alt="image" src="images/CFNet.jpg">
+<img width="1096" alt="image" src="images/all.png">
 
 Quantitative Comparison
 -----------------
