@@ -169,7 +169,7 @@ class MP_Block(nn.Module):
         return out
 
 
-class CFFNet(nn.Module):
+class CLFF(nn.Module):
     def __init__(self, pretrained=True):
         super().__init__()
         vgg16_bn = VGG16BN(pretrained=pretrained)
@@ -240,7 +240,7 @@ if __name__ == '__main__':
     inp2 = torch.rand(1, 3, 256, 256)
 
     # 创建模型实例
-    model = CFFNet()
+    model = CLFF()
 
     # 计算输出（根据模型的前向传播）
     out = model(inp1, inp2)
